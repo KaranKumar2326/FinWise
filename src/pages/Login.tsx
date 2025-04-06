@@ -53,7 +53,7 @@ export default function Login() {
             <div className="flex items-center justify-center mb-4">
               <DollarSign className="h-10 w-10 text-blue-600" />
             </div>
-            <h1 className="text-3xl font-bold">Welcome to FinBuzz</h1>
+            <h1 className="text-3xl font-bold">Welcome to FinWise</h1>
             <p className="text-gray-600 mt-2">Log in to your account</p>
           </div>
 

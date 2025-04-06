@@ -9,7 +9,7 @@ export default function Chat() {
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       id: 1,
-      text: "Hello! I'm your AI Financial Advisor from FinBuzz. I can help you with personalized financial advice based on your transaction history and current financial status. How can I assist you today?",
+      text: "Hello! I'm your AI Financial Advisor from FinWise. I can help you with personalized financial advice based on your transaction history and current financial status. How can I assist you today?",
       sender: "bot",
     },
   ]);
@@ -66,7 +66,7 @@ export default function Chat() {
     <div className="flex h-screen bg-gray-50">
       <div className="flex-1 flex flex-col max-w-4xl mx-auto bg-white shadow-lg">
         <div className="p-4 border-b">
-          <h1 className="text-xl font-semibold">FinBuzz AI Advisor</h1>
+          <h1 className="text-xl font-semibold">FinWise AI Advisor</h1>
           <p className="text-sm text-gray-500">Get expert financial guidance 24/7</p>
         </div>
 

@@ -24,7 +24,7 @@ export default function Dashboard() {
         <div className="p-4 border-b dark:border-gray-700">
           <div className="flex items-center space-x-2">
             <DollarSign className="h-6 w-6 text-blue-600" />
-            <span className="text-lg font-bold dark:text-white">FinBuzz</span>
+            <span className="text-lg font-bold dark:text-white">FinWise</span>
           </div>
         </div>
         <nav className="p-4">

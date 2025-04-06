@@ -8,7 +8,7 @@ export default function Landing() {
       <nav className="container mx-auto px-6 py-4 flex justify-between items-center">
         <div className="flex items-center space-x-2">
           <DollarSign className="h-8 w-8 text-blue-600" />
-          <span className="text-xl font-bold">FinBuzz</span>
+          <span className="text-xl font-bold">FinWise</span>
         </div>
         <div className="space-x-4">
           <Link to="/login">
