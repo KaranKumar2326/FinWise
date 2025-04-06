@@ -29,7 +29,7 @@ export default function Landing() {
             Get expert financial advice, investment strategies, and personalized guidance
             powered by advanced AI technology.
           </p>
-          <Link to="/signup">
+          <Link to="/login">
             <Button className="text-lg px-8 py-3">
               Get Started <ArrowRight className="ml-2 h-5 w-5 inline" />
             </Button>

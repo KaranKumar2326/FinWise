@@ -2,6 +2,8 @@ import { initializeApp } from "firebase/app";
 import { getAnalytics } from "firebase/analytics";
 import { 
   getAuth, 
+  GoogleAuthProvider,
+  signInWithPopup,
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
   signOut,
@@ -27,103 +29,233 @@ const analytics = getAnalytics(app);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-// Enable offline persistence
-enableIndexedDbPersistence(db)
-  .catch((err) => {
-    if (err.code === 'failed-precondition') {
-      console.warn('Multiple tabs open, persistence can only be enabled in one tab at a time.');
-    } else if (err.code === 'unimplemented') {
-      console.warn('The current browser does not support persistence.');
-    }
-  });
+// Enable offline persistence (non-blocking)
+enableIndexedDbPersistence(db).catch(console.warn);
 
-// Auth functions
-export const signUp = async (email: string, password: string, firstName: string, lastName: string, currency: string = 'INR') => {
+// Cache for user profiles to avoid repeated Firestore reads
+const userProfileCache = new Map<string, any>();
+
+// Helper function to update localStorage without blocking
+const updateLocalStorage = (key: string, value: any) => {
   try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch (e) {
+    console.warn('LocalStorage update failed', e);
+  }
+};
+
+// Fast sign-in with Google
+export const signInWithGoogle = async () => {
+  const provider = new GoogleAuthProvider();
+  try {
+    const result = await signInWithPopup(auth, provider);
+    const user = result.user;
+    
+    // Minimal localStorage update for immediate UI response
+    updateLocalStorage('userProfile', {
+      firstName: user.displayName?.split(' ')[0] || 'User',
+      lastName: user.displayName?.split(' ')[1] || '',
+      email: user.email,
+      currency: 'INR',
+      uid: user.uid
+    });
+
+    // Firestore update in background
+    setDoc(doc(db, "users", user.uid), {
+      firstName: user.displayName?.split(' ')[0] || 'User',
+      lastName: user.displayName?.split(' ')[1] || '',
+      email: user.email,
+      currency: 'INR',
+      uid: user.uid,
+      lastUpdated: new Date().toISOString()
+    }, { merge: true }).catch(console.warn);
+
+    return user;
+  } catch (error) {
+    console.error('Google sign-in error:', error);
+    throw error;
+  }
+};
+
+// Optimized email/password sign-up
+export const signUp = async (
+  email: string,
+  password: string,
+  firstName: string,
+  lastName: string,
+  currency: string = 'INR'
+): Promise<User> => {
+  // Input validation
+  if (!email || !password || !firstName || !lastName) {
+    throw new Error('All fields are required');
+  }
+
+  if (password.length < 6) {
+    throw new Error('Password must be at least 6 characters');
+  }
+
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw new Error('Please enter a valid email address');
+  }
+
+  try {
+    // 1. Create user (core authentication)
     const userCredential = await createUserWithEmailAndPassword(auth, email, password);
     const user = userCredential.user;
 
-    // Update profile with display name
-    await updateProfile(user, {
-      displayName: firstName
-    });
+    // 2. Update display name (non-blocking)
+    updateProfile(user, { displayName: firstName }).catch(console.warn);
 
-    // Store additional user data in Firestore
-    await setDoc(doc(db, "users", user.uid), {
+    // 3. Prepare profile data
+    const profileData = {
       firstName,
       lastName,
       email,
       currency,
-      createdAt: new Date().toISOString()
-    });
+      uid: user.uid,
+      createdAt: new Date().toISOString(),
+      lastUpdated: new Date().toISOString()
+    };
 
-    // Store user profile in localStorage immediately
-    localStorage.setItem('userProfile', JSON.stringify({
-      firstName,
-      lastName,
-      email,
-      currency
-    }));
+    // 4. Update cache and localStorage immediately
+    userProfileCache.set(user.uid, profileData);
+    updateLocalStorage('userProfile', profileData);
+
+    // 5. Firestore update in background
+    setDoc(doc(db, "users", user.uid), profileData).catch(console.warn);
 
     return user;
   } catch (error: any) {
     console.error('Signup error:', error);
-    if (error.code === 'auth/network-request-failed') {
-      throw new Error('Network error. Please check your internet connection.');
+    if (error.code === 'auth/email-already-in-use') {
+      throw new Error('This email is already registered');
     }
-    throw new Error(error.message);
+    if (error.code === 'auth/weak-password') {
+      throw new Error('Password must be at least 6 characters');
+    }
+    throw new Error('Signup failed. Please try again.');
   }
 };
 
+// Fast email/password sign-in
 export const signIn = async (email: string, password: string) => {
   try {
+    // 1. Core authentication
     const userCredential = await signInWithEmailAndPassword(auth, email, password);
     const user = userCredential.user;
 
+    // 2. Check cache first for immediate response
+    const cachedProfile = userProfileCache.get(user.uid);
+    if (cachedProfile) {
+      updateLocalStorage('userProfile', cachedProfile);
+      return user;
+    }
+
+    // 3. Check localStorage for fast fallback
+    const storedProfile = localStorage.getItem('userProfile');
+    if (storedProfile) {
+      try {
+        const parsed = JSON.parse(storedProfile);
+        if (parsed.uid === user.uid) {
+          userProfileCache.set(user.uid, parsed);
+          return user;
+        }
+      } catch (e) {
+        console.warn('Failed to parse stored profile', e);
+      }
+    }
+
+    // 4. Firestore lookup with timeout
     try {
-      // Get user data from Firestore with timeout
       const userDoc = await Promise.race([
         getDoc(doc(db, "users", user.uid)),
         new Promise((_, reject) => 
-          setTimeout(() => reject(new Error('Request timeout')), 10000)
+          setTimeout(() => reject(new Error('Firestore timeout')), 3000)
         )
       ]);
 
-      if (userDoc && 'exists' in userDoc && userDoc.exists()) {
-        const userData = userDoc.data();
-        localStorage.setItem('userProfile', JSON.stringify({
-          firstName: userData.firstName,
-          lastName: userData.lastName,
-          email: userData.email,
-          currency: userData.currency
-        }));
+      if (userDoc.exists()) {
+        const profileData = userDoc.data();
+        userProfileCache.set(user.uid, profileData);
+        updateLocalStorage('userProfile', profileData);
       } else {
-        // Fallback to basic profile if Firestore is unavailable
-        localStorage.setItem('userProfile', JSON.stringify({
+        // Fallback to minimal profile
+        const fallbackProfile = {
+          firstName: user.displayName?.split(' ')[0] || 'User',
+          lastName: user.displayName?.split(' ')[1] || '',
           email: user.email,
-          firstName: user.displayName || 'User',
-          lastName: '',
-          currency: 'INR'
-        }));
+          currency: 'INR',
+          uid: user.uid
+        };
+        updateLocalStorage('userProfile', fallbackProfile);
       }
     } catch (firestoreError) {
-      console.warn('Failed to fetch Firestore profile:', firestoreError);
-      // Fallback to basic profile
-      localStorage.setItem('userProfile', JSON.stringify({
+      console.warn('Firestore profile fetch failed', firestoreError);
+      // Use minimal profile if Firestore fails
+      updateLocalStorage('userProfile', {
         email: user.email,
-        firstName: user.displayName || 'User',
+        firstName: user.displayName?.split(' ')[0] || 'User',
         lastName: '',
-        currency: 'INR'
-      }));
+        currency: 'INR',
+        uid: user.uid
+      });
     }
 
     return user;
   } catch (error: any) {
     console.error('Login error:', error);
     if (error.code === 'auth/network-request-failed') {
-      throw new Error('Network error. Please check your internet connection.');
+      throw new Error('Network error. Please check your connection.');
     }
-    throw new Error(error.message);
+    throw new Error('Login failed. Please check your credentials.');
+  }
+};
+
+// Optimized auth state observer
+export const onAuthChange = (callback: (user: User | null) => void) => {
+  return onAuthStateChanged(auth, (user) => {
+    if (user) {
+      // Check cache first for immediate response
+      const cachedProfile = userProfileCache.get(user.uid);
+      if (cachedProfile) {
+        callback(user);
+        return;
+      }
+
+      // Async profile loading doesn't block the callback
+      loadUserProfile(user).catch(console.warn);
+    }
+    callback(user);
+  });
+};
+
+// Helper to load user profile (non-blocking)
+const loadUserProfile = async (user: User) => {
+  try {
+    const userDoc = await getDoc(doc(db, "users", user.uid));
+    if (userDoc.exists()) {
+      const profileData = userDoc.data();
+      userProfileCache.set(user.uid, profileData);
+      updateLocalStorage('userProfile', profileData);
+    } else {
+      // Create minimal profile if none exists
+      const fallbackProfile = {
+        firstName: user.displayName?.split(' ')[0] || 'User',
+        lastName: user.displayName?.split(' ')[1] || '',
+        email: user.email,
+        currency: 'INR',
+        uid: user.uid
+      };
+      updateLocalStorage('userProfile', fallbackProfile);
+      // Save to Firestore in background
+      setDoc(doc(db, "users", user.uid), {
+        ...fallbackProfile,
+        createdAt: new Date().toISOString(),
+        lastUpdated: new Date().toISOString()
+      }).catch(console.warn);
+    }
+  } catch (error) {
+    console.warn('Profile load failed', error);
   }
 };
 
@@ -131,40 +263,11 @@ export const logOut = async () => {
   try {
     await signOut(auth);
     localStorage.removeItem('userProfile');
+    userProfileCache.clear();
   } catch (error: any) {
     console.error('Logout error:', error);
-    throw new Error(error.message);
+    throw error;
   }
-};
-
-// Auth context
-export const onAuthChange = (callback: (user: User | null) => void) => {
-  return onAuthStateChanged(auth, async (user) => {
-    if (user && !localStorage.getItem('userProfile')) {
-      try {
-        const userDoc = await getDoc(doc(db, "users", user.uid));
-        if (userDoc.exists()) {
-          const userData = userDoc.data();
-          localStorage.setItem('userProfile', JSON.stringify({
-            firstName: userData.firstName,
-            lastName: userData.lastName,
-            email: userData.email,
-            currency: userData.currency
-          }));
-        }
-      } catch (error) {
-        console.warn('Failed to fetch user profile:', error);
-        // Fallback to basic profile
-        localStorage.setItem('userProfile', JSON.stringify({
-          email: user.email,
-          firstName: user.displayName || 'User',
-          lastName: '',
-          currency: 'INR'
-        }));
-      }
-    }
-    callback(user);
-  });
 };
 
 export { auth, db };
